@@ -1,0 +1,9 @@
+{
+  "name": "pulse-scalp-pro",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Crypto scalping analyzer for Netlify",
+  "scripts": {
+    "dev": "netlify dev"
+  }
+}
