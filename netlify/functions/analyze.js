@@ -1,4 +1,4 @@
-const BASE_URL = "https://fapi.binance.com";
+const BYBIT_BASE = 'https://api.bybit.com/v5/market';
 
 function json(statusCode, body) {
   return {
@@ -34,28 +34,59 @@ function roundToTick(value, tick) {
 async function fetchJson(url, timeoutMs = 5000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+
   try {
-    const res = await fetch(url, { signal: controller.signal, headers: { 'User-Agent': 'PulseScalpPro/1.0' } });
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      throw new Error(`Binance request failed (${res.status}): ${text.slice(0, 140)}`);
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'PulseScalpPro/1.0',
+        'Accept': 'application/json',
+      },
+    });
+
+    const text = await res.text().catch(() => '');
+    let data = null;
+
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch {
+      data = null;
     }
-    return await res.json();
+
+    if (!res.ok) {
+      throw new Error(`Bybit request failed (${res.status}): ${text.slice(0, 180)}`);
+    }
+
+    if (data && typeof data === 'object' && 'retCode' in data && data.retCode !== 0) {
+      throw new Error(`Bybit API error (${data.retCode}): ${data.retMsg || 'Unknown error'}`);
+    }
+
+    return data;
   } finally {
     clearTimeout(timer);
   }
 }
 
-function parseKlines(klines) {
-  return klines.map(k => ({
-    openTime: Number(k[0]),
-    open: Number(k[1]),
-    high: Number(k[2]),
-    low: Number(k[3]),
-    close: Number(k[4]),
-    volume: Number(k[5]),
-    closeTime: Number(k[6]),
-  }));
+function unwrapListResponse(data) {
+  if (!data) return [];
+  if (Array.isArray(data)) return data;
+  if (data?.result?.list && Array.isArray(data.result.list)) return data.result.list;
+  if (data?.result && Array.isArray(data.result)) return data.result;
+  return [];
+}
+
+function parseKlinesBybit(data) {
+  return unwrapListResponse(data)
+    .map(k => ({
+      openTime: Number(k[0]),
+      open: Number(k[1]),
+      high: Number(k[2]),
+      low: Number(k[3]),
+      close: Number(k[4]),
+      volume: Number(k[5]),
+      closeTime: Number(k[0]) + 60_000,
+    }))
+    .sort((a, b) => a.openTime - b.openTime);
 }
 
 function sma(values, period) {
@@ -78,7 +109,8 @@ function rsi(values, period = 14) {
   let losses = 0;
   for (let i = 1; i <= period; i++) {
     const diff = values[i] - values[i - 1];
-    if (diff >= 0) gains += diff; else losses -= diff;
+    if (diff >= 0) gains += diff;
+    else losses -= diff;
   }
   let avgGain = gains / period;
   let avgLoss = losses / period;
@@ -96,17 +128,14 @@ function rsi(values, period = 14) {
 
 function macd(values, fast = 12, slow = 26, signalPeriod = 9) {
   if (values.length < slow + signalPeriod) return null;
+
   const emaFastSeries = [];
   const emaSlowSeries = [];
-  let fastEma = null;
-  let slowEma = null;
   const kFast = 2 / (fast + 1);
   const kSlow = 2 / (slow + 1);
 
-  const seedFast = values.slice(0, fast).reduce((a, b) => a + b, 0) / fast;
-  const seedSlow = values.slice(0, slow).reduce((a, b) => a + b, 0) / slow;
-  fastEma = seedFast;
-  slowEma = seedSlow;
+  let fastEma = values.slice(0, fast).reduce((a, b) => a + b, 0) / fast;
+  let slowEma = values.slice(0, slow).reduce((a, b) => a + b, 0) / slow;
 
   for (let i = 0; i < values.length; i++) {
     if (i >= fast) fastEma = values[i] * kFast + fastEma * (1 - kFast);
@@ -153,16 +182,21 @@ function atr(candles, period = 14) {
 function volumeAnalysis(candles) {
   const volumes = candles.map(c => c.volume);
   const current = volumes[volumes.length - 1];
-  const avg = volumes.slice(Math.max(0, volumes.length - 21), -1).reduce((a, b) => a + b, 0) / Math.max(1, Math.min(20, volumes.length - 1));
+  const avgSlice = volumes.slice(Math.max(0, volumes.length - 21), -1);
+  const avg = avgSlice.reduce((a, b) => a + b, 0) / Math.max(1, Math.min(20, volumes.length - 1));
   const spike = avg > 0 ? current > 1.5 * avg : false;
-  const prevAvg = volumes.slice(Math.max(0, volumes.length - 11), -1).reduce((a, b) => a + b, 0) / Math.max(1, Math.min(10, volumes.length - 1));
+  const prevSlice = volumes.slice(Math.max(0, volumes.length - 11), -1);
+  const prevAvg = prevSlice.reduce((a, b) => a + b, 0) / Math.max(1, Math.min(10, volumes.length - 1));
   const trend = current >= prevAvg ? 'UP' : 'DOWN';
   return { current, average: avg, spike, trend };
 }
 
 function orderBookAnalysis(depth) {
-  const bids = depth.bids.slice(0, 20).map(([p, q]) => ({ price: Number(p), qty: Number(q) }));
-  const asks = depth.asks.slice(0, 20).map(([p, q]) => ({ price: Number(p), qty: Number(q) }));
+  const bidsRaw = depth?.result?.b || depth?.b || [];
+  const asksRaw = depth?.result?.a || depth?.a || [];
+  const bids = bidsRaw.slice(0, 20).map(([p, q]) => ({ price: Number(p), qty: Number(q) }));
+  const asks = asksRaw.slice(0, 20).map(([p, q]) => ({ price: Number(p), qty: Number(q) }));
+
   const bidVolume = bids.reduce((a, b) => a + b.qty, 0);
   const askVolume = asks.reduce((a, b) => a + b.qty, 0);
   const pressureRatio = askVolume === 0 ? Infinity : bidVolume / askVolume;
@@ -189,21 +223,25 @@ function orderBookAnalysis(depth) {
   };
 }
 
-function tapeAnalysis(trades) {
+function tapeAnalysis(tradesData) {
+  const trades = unwrapListResponse(tradesData);
   let buyQty = 0;
   let sellQty = 0;
   let buyCount = 0;
   let sellCount = 0;
+
   for (const t of trades) {
-    const qty = Number(t.qty);
-    if (t.isBuyerMaker) {
-      sellQty += qty;
-      sellCount += 1;
-    } else {
+    const qty = Number(t.size ?? t.qty ?? 0);
+    const side = String(t.side || '').toLowerCase();
+    if (side === 'buy') {
       buyQty += qty;
       buyCount += 1;
+    } else if (side === 'sell') {
+      sellQty += qty;
+      sellCount += 1;
     }
   }
+
   const dominance = buyQty >= sellQty ? 'BUY' : 'SELL';
   const ratio = sellQty === 0 ? Infinity : buyQty / sellQty;
   return { buyQty, sellQty, buyCount, sellCount, dominance, ratio: Number.isFinite(ratio) ? ratio : null };
@@ -214,11 +252,12 @@ function trendState(candles1m, candles5m, ema9, ema21, sma50, rsi14, macdData, a
   const last5mClose = candles5m[candles5m.length - 1].close;
   const emaGapPct = Math.abs(ema9 - ema21) / lastClose1m * 100;
   const atrPct = atr14 ? (atr14 / lastClose1m) * 100 : 0;
+
   const bullishAlignment = ema9 > ema21 && lastClose1m > sma50 && lastClose1m >= last5mClose * 0.999;
   const bearishAlignment = ema9 < ema21 && lastClose1m < sma50 && lastClose1m <= last5mClose * 1.001;
 
   let marketCondition = 'SIDEWAYS';
-  if ((emaGapPct >= 0.08 && atrPct >= 0.06) || (bullishAlignment || bearishAlignment)) {
+  if ((emaGapPct >= 0.08 && atrPct >= 0.06) || bullishAlignment || bearishAlignment) {
     marketCondition = 'TRENDING';
   }
 
@@ -237,10 +276,6 @@ function buildReason(parts) {
   return parts.filter(Boolean).join(' ');
 }
 
-function percentageDistance(a, b) {
-  return ((a - b) / b) * 100;
-}
-
 exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return json(200, { ok: true });
 
@@ -251,30 +286,28 @@ exports.handler = async (event) => {
   try {
     const body = JSON.parse(event.body || '{}');
     const symbol = String(body.symbol || 'BTCUSDT').toUpperCase().trim();
+    const category = String(body.category || 'linear').toLowerCase() === 'spot' ? 'spot' : 'linear';
     const capital = Math.max(10, Number(body.capital || 100));
     const riskPercent = clamp(Number(body.riskPercent || 1), 1, 2);
     const leverageMode = body.leverageMode === 'manual' ? 'manual' : 'auto';
     const manualLeverage = clamp(Number(body.leverage || 5), 1, 125);
 
-    const [klines1mRaw, klines5mRaw, depth, trades, exchangeInfo] = await Promise.all([
-      fetchJson(`${BINANCE_BASE}/klines?symbol=${symbol}&interval=1m&limit=120`),
-      fetchJson(`${BINANCE_BASE}/klines?symbol=${symbol}&interval=5m&limit=120`),
-      fetchJson(`${BINANCE_BASE}/depth?symbol=${symbol}&limit=100`),
-      fetchJson(`${BINANCE_BASE}/trades?symbol=${symbol}&limit=100`),
-      fetchJson(`${BINANCE_BASE}/exchangeInfo?symbol=${symbol}`),
+    const [klines1mRaw, klines5mRaw, depth, trades, instrumentInfo] = await Promise.all([
+      fetchJson(`${BYBIT_BASE}/kline?category=${category}&symbol=${symbol}&interval=1&limit=120`),
+      fetchJson(`${BYBIT_BASE}/kline?category=${category}&symbol=${symbol}&interval=5&limit=120`),
+      fetchJson(`${BYBIT_BASE}/orderbook?category=${category}&symbol=${symbol}&limit=100`),
+      fetchJson(`${BYBIT_BASE}/recent-trade?category=${category}&symbol=${symbol}&limit=100`),
+      fetchJson(`${BYBIT_BASE}/instruments-info?category=${category}&symbol=${symbol}`),
     ]);
 
-    const candles1m = parseKlines(klines1mRaw);
-    const candles5m = parseKlines(klines5mRaw);
+    const candles1m = parseKlinesBybit(klines1mRaw);
+    const candles5m = parseKlinesBybit(klines5mRaw);
 
     if (candles1m.length < 60 || candles5m.length < 60) {
-      throw new Error('Insufficient candle history returned by Binance.');
+      throw new Error('Insufficient candle history returned by Bybit.');
     }
 
     const closes1m = candles1m.map(c => c.close);
-    const closes5m = candles5m.map(c => c.close);
-    const highs1m = candles1m.map(c => c.high);
-    const lows1m = candles1m.map(c => c.low);
 
     const ema9 = ema(closes1m, 9);
     const ema21 = ema(closes1m, 21);
@@ -292,7 +325,6 @@ exports.handler = async (event) => {
     const entry = Number(ob.bestAsk || lastCandle.close);
     const currentPrice = lastCandle.close;
     const feeRate = 0.001; // 0.1%
-    const feeEstimate = entry * capital * feeRate;
 
     const bullSignal = ema9 > ema21 && rsi14 > 50 && volume.spike && ob.pressure === 'BUY' && tape.dominance === 'BUY';
     const bearSignal = ema9 < ema21 && rsi14 < 50 && volume.spike && ob.pressure === 'SELL' && tape.dominance === 'SELL';
@@ -305,21 +337,15 @@ exports.handler = async (event) => {
       (ema9 > ema21 && rsi14 < 50) ||
       (ema9 < ema21 && rsi14 > 50) ||
       ob.pressure === 'NEUTRAL' ||
-      tape.dominance === 'BUY' && ob.pressure === 'SELL' ||
-      tape.dominance === 'SELL' && ob.pressure === 'BUY';
+      (tape.dominance === 'BUY' && ob.pressure === 'SELL') ||
+      (tape.dominance === 'SELL' && ob.pressure === 'BUY');
 
     const stopPctBase = clamp((atr14 / currentPrice) * 100 * 0.8, 0.5, 1.0);
-    const stopPct = signal === 'BUY'
-      ? stopPctBase
-      : signal === 'SELL'
-        ? stopPctBase
-        : stopPctBase;
 
-    const direction = signal === 'SELL' ? -1 : 1;
     const stopLoss = signal === 'BUY'
-      ? entry * (1 - stopPct / 100)
+      ? entry * (1 - stopPctBase / 100)
       : signal === 'SELL'
-        ? entry * (1 + stopPct / 100)
+        ? entry * (1 + stopPctBase / 100)
         : entry;
 
     const tp1 = signal === 'BUY'
@@ -327,11 +353,13 @@ exports.handler = async (event) => {
       : signal === 'SELL'
         ? entry * 0.995
         : entry;
+
     const tp2 = signal === 'BUY'
       ? entry * 1.01
       : signal === 'SELL'
         ? entry * 0.99
         : entry;
+
     const tp3 = signal === 'BUY'
       ? entry * 1.02
       : signal === 'SELL'
@@ -348,12 +376,13 @@ exports.handler = async (event) => {
           return 2;
         })();
 
-    const filters = (exchangeInfo.symbols || [])[0]?.filters || [];
-    const lotSize = filters.find(f => f.filterType === 'LOT_SIZE');
-    const priceFilter = filters.find(f => f.filterType === 'PRICE_FILTER');
-    const stepSize = lotSize ? Number(lotSize.stepSize) : null;
-    const tickSize = priceFilter ? Number(priceFilter.tickSize) : null;
-    const minQty = lotSize ? Number(lotSize.minQty) : null;
+    const infoList = instrumentInfo?.result?.list || [];
+    const instrument = infoList[0] || {};
+    const priceFilter = instrument.priceFilter || {};
+    const lotSize = instrument.lotSizeFilter || {};
+    const tickSize = priceFilter.tickSize ? Number(priceFilter.tickSize) : null;
+    const stepSize = lotSize.qtyStep ? Number(lotSize.qtyStep) : null;
+    const minQty = lotSize.minOrderQty ? Number(lotSize.minOrderQty) : null;
 
     const riskAmount = capital * (riskPercent / 100);
     const stopDistance = Math.abs(entry - stopLoss);
@@ -387,10 +416,6 @@ exports.handler = async (event) => {
     if (signal === 'NO TRADE' && mixed) confidence -= 4;
     confidence = clamp(confidence, 0, 98);
 
-    const orderbookPressure = ob.pressure;
-    const tapeMomentum = tape.dominance;
-    const volumeCondition = volume.spike ? 'STRONG' : 'WEAK';
-
     const reason = buildReason([
       signal === 'BUY' ? 'BUY signal confirmed by EMA9 > EMA21, RSI > 50, volume spike, bid pressure, and buyer-dominant tape.' : null,
       signal === 'SELL' ? 'SELL signal confirmed by EMA9 < EMA21, RSI < 50, volume spike, ask pressure, and seller-dominant tape.' : null,
@@ -398,6 +423,7 @@ exports.handler = async (event) => {
       `Spread ${ob.spreadPct !== null ? ob.spreadPct.toFixed(4) + '%' : 'n/a'}; estimated round-trip fee impact ~${(feeRate * 2 * 100).toFixed(2)}%.`,
       `Risk sizing uses ${riskPercent.toFixed(2)}% of ${capital} USDT with leverage ${leverage}x and approximate quantity ${quantity}.`,
       `5m confirmation: ${trend.bullishAlignment ? 'bullish' : trend.bearishAlignment ? 'bearish' : 'neutral'}.`,
+      `Bybit market data retrieved from kline, orderbook, recent-trade, and instruments-info endpoints.`,
     ]);
 
     return json(200, {
@@ -412,9 +438,9 @@ exports.handler = async (event) => {
       tp3: signal === 'NO TRADE' ? null : roundedTp3,
       reason,
       market_condition: trend.marketCondition,
-      volume_condition: volumeCondition,
-      orderbook_pressure: orderbookPressure,
-      tape_momentum: tapeMomentum,
+      volume_condition: volume.spike ? 'STRONG' : 'WEAK',
+      orderbook_pressure: ob.pressure,
+      tape_momentum: tape.dominance,
       risk_reward_ratio: signal !== 'NO TRADE' ? ((Math.abs(roundedTp1 - roundedEntry) / Math.abs(roundedEntry - roundedStop)) || null) : null,
       market_data: {
         current_price: currentPrice,
@@ -432,6 +458,7 @@ exports.handler = async (event) => {
           price_tick: tickSize,
           qty_step: stepSize,
         },
+        bybit_symbol_type: category,
       },
       indicators: {
         ema9,
@@ -470,7 +497,7 @@ exports.handler = async (event) => {
         risk_amount: Number(riskAmount.toFixed(6)),
         leverage_mode: leverageMode,
         leverage_suggested: leverage,
-        stop_pct: stopPct,
+        stop_pct: stopPctBase,
         fee_rate: feeRate,
       },
       flags: {
