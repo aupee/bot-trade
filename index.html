@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PulseScalp Pro | Crypto Scalping Analyzer</title>
+  <meta name="description" content="Professional crypto scalping analysis dashboard powered by Binance data and Netlify Functions." />
+  <meta name="theme-color" content="#0b1020" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="bg-orb orb-1"></div>
+  <div class="bg-orb orb-2"></div>
+
+  <header class="topbar glass">
+    <div class="brand">
+      <div class="brand-mark">PS</div>
+      <div>
+        <div class="brand-title">PulseScalp Pro</div>
+        <div class="brand-sub">Binance scalping analyzer</div>
+      </div>
+    </div>
+    <nav class="topnav">
+      <a href="#home">Home</a>
+      <a href="#analyze">Analyze</a>
+      <a href="#results">Results</a>
+    </nav>
+  </header>
+
+  <main>
+    <section id="home" class="hero">
+      <div class="hero-copy">
+        <span class="eyebrow">Frontend + Netlify Function architecture</span>
+        <h1>Professional crypto scalping analysis in one click.</h1>
+        <p>
+          Select a coin, set capital and risk, then let the backend pull live Binance data,
+          calculate indicators, read order-book pressure, and return a structured signal.
+        </p>
+        <div class="hero-actions">
+          <a href="#analyze" class="btn btn-primary">Start Analysis</a>
+          <div class="hero-chip">No auto trading • Analysis only</div>
+        </div>
+
+        <div class="hero-stats">
+          <div class="stat-card glass">
+            <span>Entry style</span>
+            <strong>1m + 5m confirmation</strong>
+          </div>
+          <div class="stat-card glass">
+            <span>Risk control</span>
+            <strong>1–2% capital</strong>
+          </div>
+          <div class="stat-card glass">
+            <span>Execution bias</span>
+            <strong>Speed-first response</strong>
+          </div>
+        </div>
+      </div>
+
+      <div class="hero-panel glass">
+        <div class="panel-header">
+          <span>Live signal preview</span>
+          <span class="pill">Manual trigger</span>
+        </div>
+        <div class="signal-preview">
+          <div id="previewSignal" class="signal-badge neutral">NO TRADE</div>
+          <div id="previewConfidence" class="confidence">Confidence: 0%</div>
+        </div>
+        <div class="mini-grid">
+          <div><span>Market</span><strong>Binance Spot Data</strong></div>
+          <div><span>Indicators</span><strong>EMA, RSI, MACD, ATR</strong></div>
+          <div><span>Microstructure</span><strong>Depth + Trades</strong></div>
+          <div><span>Risk</span><strong>SL / TP / Leverage</strong></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="analyze" class="workspace">
+      <div class="section-title">
+        <div>
+          <span class="eyebrow">Analysis dashboard</span>
+          <h2>Run a scalping scan</h2>
+        </div>
+        <p>Click once to fetch live data, process indicators, and render the final signal.</p>
+      </div>
+
+      <div class="dashboard-grid">
+        <form id="analysisForm" class="controls glass">
+          <div class="control-grid">
+            <label>
+              <span>Coin pair</span>
+              <select id="symbol">
+                <option>BTCUSDT</option>
+                <option>ETHUSDT</option>
+                <option>BNBUSDT</option>
+                <option>SOLUSDT</option>
+                <option>XRPUSDT</option>
+                <option>AVAXUSDT</option>
+                <option>DOGEUSDT</option>
+                <option>LINKUSDT</option>
+              </select>
+            </label>
+
+            <label>
+              <span>Capital (USDT)</span>
+              <input id="capital" type="number" min="10" step="10" value="100" />
+            </label>
+
+            <label>
+              <span>Risk %</span>
+              <input id="riskPercent" type="number" min="1" max="2" step="0.1" value="1" />
+            </label>
+
+            <label>
+              <span>Leverage mode</span>
+              <select id="leverageMode">
+                <option value="auto" selected>Auto</option>
+                <option value="manual">Manual</option>
+              </select>
+            </label>
+
+            <label>
+              <span>Manual leverage</span>
+              <input id="manualLeverage" type="number" min="1" max="125" step="1" value="5" />
+            </label>
+
+            <label>
+              <span>Fee estimate</span>
+              <input type="text" value="0.1% / side" disabled />
+            </label>
+          </div>
+
+          <button id="startBtn" class="btn btn-primary btn-block" type="submit">
+            Start Analysis
+          </button>
+
+          <div class="note">
+            This tool analyzes data only. It does not place orders.
+          </div>
+        </form>
+
+        <section id="results" class="results glass">
+          <div class="results-top">
+            <div>
+              <span class="eyebrow">Structured output</span>
+              <h3 id="symbolLabel">—</h3>
+            </div>
+            <div id="loading" class="loader hidden">
+              <span></span><span></span><span></span>
+            </div>
+          </div>
+
+          <div class="signal-row">
+            <div id="signalBadge" class="signal-badge neutral">NO TRADE</div>
+            <div class="score-box">
+              <span>Confidence</span>
+              <strong id="confidenceText">0%</strong>
+            </div>
+            <div class="score-box">
+              <span>RR</span>
+              <strong id="rrText">—</strong>
+            </div>
+          </div>
+
+          <div class="price-grid">
+            <div class="price-card">
+              <span>Entry</span>
+              <strong id="entryPrice">—</strong>
+            </div>
+            <div class="price-card danger">
+              <span>Stop Loss</span>
+              <strong id="stopLoss">—</strong>
+            </div>
+            <div class="price-card success">
+              <span>TP1</span>
+              <strong id="tp1">—</strong>
+            </div>
+            <div class="price-card success">
+              <span>TP2</span>
+              <strong id="tp2">—</strong>
+            </div>
+            <div class="price-card success">
+              <span>TP3</span>
+              <strong id="tp3">—</strong>
+            </div>
+            <div class="price-card">
+              <span>Suggested Leverage</span>
+              <strong id="leverage">—</strong>
+            </div>
+          </div>
+
+          <div class="info-grid">
+            <div class="info-card">
+              <span>Market condition</span>
+              <strong id="marketCondition">—</strong>
+            </div>
+            <div class="info-card">
+              <span>Volume condition</span>
+              <strong id="volumeCondition">—</strong>
+            </div>
+            <div class="info-card">
+              <span>Order book pressure</span>
+              <strong id="orderbookPressure">—</strong>
+            </div>
+            <div class="info-card">
+              <span>Tape momentum</span>
+              <strong id="tapeMomentum">—</strong>
+            </div>
+          </div>
+
+          <div class="detail-grid">
+            <article class="detail-card">
+              <h4>Market data</h4>
+              <pre id="marketData">Click Start Analysis to load live values.</pre>
+            </article>
+            <article class="detail-card">
+              <h4>Indicator results</h4>
+              <pre id="indicatorData">—</pre>
+            </article>
+            <article class="detail-card">
+              <h4>Order book pressure</h4>
+              <pre id="orderbookData">—</pre>
+            </article>
+            <article class="detail-card highlight">
+              <h4>Final signal panel</h4>
+              <pre id="finalReason">—</pre>
+            </article>
+          </div>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <script src="./app.js"></script>
+</body>
+</html>
