@@ -31,37 +31,28 @@ function roundToTick(value, tick) {
   return Number(rounded.toFixed(precision));
 }
 
-async function fetchJson(url, timeoutMs = 5000) {
+async function fetchJson(url, timeoutMs = 8000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
-
+  
   try {
     const res = await fetch(url, {
       signal: controller.signal,
       headers: {
-        'User-Agent': 'PulseScalpPro/1.0',
-        'Accept': 'application/json',
-      },
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json",
+        "Referer": "https://www.bybit.com/",
+        "Origin": "https://www.bybit.com"
+      }
     });
-
-    const text = await res.text().catch(() => '');
-    let data = null;
-
-    try {
-      data = text ? JSON.parse(text) : {};
-    } catch {
-      data = null;
-    }
-
+    
     if (!res.ok) {
-      throw new Error(`Bybit request failed (${res.status}): ${text.slice(0, 180)}`);
+      const text = await res.text();
+      throw new Error(`Bybit request failed (${res.status}): ${text.slice(0, 120)}`);
     }
-
-    if (data && typeof data === 'object' && 'retCode' in data && data.retCode !== 0) {
-      throw new Error(`Bybit API error (${data.retCode}): ${data.retMsg || 'Unknown error'}`);
-    }
-
-    return data;
+    
+    return await res.json();
+    
   } finally {
     clearTimeout(timer);
   }
@@ -291,15 +282,39 @@ exports.handler = async (event) => {
     const riskPercent = clamp(Number(body.riskPercent || 1), 1, 2);
     const leverageMode = body.leverageMode === 'manual' ? 'manual' : 'auto';
     const manualLeverage = clamp(Number(body.leverage || 5), 1, 125);
+    
+    const [kline1mRes, kline5mRes, orderbookRes, tradesRes] = await Promise.all([
+  fetchJson(`${BYBIT_BASE}/v5/market/kline?category=linear&symbol=${symbol}&interval=1&limit=120`),
+  fetchJson(`${BYBIT_BASE}/v5/market/kline?category=linear&symbol=${symbol}&interval=5&limit=120`),
+  fetchJson(`${BYBIT_BASE}/v5/market/orderbook?category=linear&symbol=${symbol}&limit=50`),
+  fetchJson(`${BYBIT_BASE}/v5/market/recent-trade?category=linear&symbol=${symbol}&limit=50`)
+]);
+   
+   const klines1mRaw = kline1mRes.result.list;
+const klines5mRaw = kline5mRes.result.list;
 
-    const [klines1mRaw, klines5mRaw, depth, trades, instrumentInfo] = await Promise.all([
-      fetchJson(`${BYBIT_BASE}/kline?category=${category}&symbol=${symbol}&interval=1&limit=120`),
-      fetchJson(`${BYBIT_BASE}/kline?category=${category}&symbol=${symbol}&interval=5&limit=120`),
-      fetchJson(`${BYBIT_BASE}/orderbook?category=${category}&symbol=${symbol}&limit=100`),
-      fetchJson(`${BYBIT_BASE}/recent-trade?category=${category}&symbol=${symbol}&limit=100`),
-      fetchJson(`${BYBIT_BASE}/instruments-info?category=${category}&symbol=${symbol}`),
-    ]);
+// format Bybit → Binance style
+function convertKlines(data) {
+  return data.map(k => ([
+    Number(k[0]), // time
+    k[1], // open
+    k[2], // high
+    k[3], // low
+    k[4], // close
+    k[5], // volume
+    k[0] // closeTime dummy
+  ])).reverse();
+}
 
+const depth = {
+  bids: orderbookRes.result.b.map(i => [i[0], i[1]]),
+  asks: orderbookRes.result.a.map(i => [i[0], i[1]])
+};
+
+const trades = tradesRes.result.list.map(t => ({
+  qty: t.size,
+  isBuyerMaker: t.side === "Sell"
+}));
     const candles1m = parseKlinesBybit(klines1mRaw);
     const candles5m = parseKlinesBybit(klines5mRaw);
 
