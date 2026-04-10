@@ -1,4 +1,4 @@
-const BINANCE_BASE = 'https://api.binance.com/api/v3';
+const BASE_URL = "https://fapi.binance.com";
 
 function json(statusCode, body) {
   return {
